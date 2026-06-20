@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>교통사고 위험도 AI 예측 — TAAS 공공데이터 기반</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+/* ── 리셋 & 변수 ─────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --c-bg:      #0f172a;
+  --c-surface: #1e293b;
+  --c-card:    #243044;
+  --c-border:  #334155;
+  --c-text:    #e2e8f0;
+  --c-muted:   #94a3b8;
+  --c-accent:  #3b82f6;
+  --c-high:    #ef4444;
+  --c-mid:     #f59e0b;
+  --c-low:     #22c55e;
+  --radius:    12px;
+  --shadow:    0 4px 24px rgba(0,0,0,.4);
+}
+
+body {
+  font-family: 'Noto Sans KR', sans-serif;
+  background: var(--c-bg);
+  color: var(--c-text);
+  min-height: 100vh;
+  line-height: 1.6;
+}
+
+/* ── 헤더 ────────────────────────────────────── */
+header {
+  background: linear-gradient(135deg, #1a2744 0%, #1e3a5f 100%);
+  border-bottom: 1px solid var(--c-border);
+  padding: 16px 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+.logo {
+  width: 44px; height: 44px;
+  background: linear-gradient(135deg, var(--c-accent), #60a5fa);
+  border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px;
+  flex-shrink: 0;
+}
+header h1 { font-size: 18px; font-weight: 700; }
+header .subtitle { font-size: 12px; color: var(--c-muted); margin-top: 2px; }
+.badge {
+  margin-left: auto;
+  background: rgba(59,130,246,.15);
+  border: 1px solid rgba(59,130,246,.4);
+  color: #93c5fd;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* ── 레이아웃 ────────────────────────────────── */
+.main-grid {
+  display: grid;
+  grid-template-columns: 380px 1fr;
+  grid-template-rows: auto 1fr;
+  gap: 0;
+  height: calc(100vh - 77px);
+}
+
+/* ── 왼쪽 패널 ───────────────────────────────── */
+.panel-left {
+  background: var(--c-surface);
+  border-right: 1px solid var(--c-border);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.section {
+  padding: 20px;
+  border-bottom: 1px solid var(--c-border);
+}
+.section-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--c-muted);
+  margin-bottom: 14px;
+}
+
+/* ── 입력 폼 ─────────────────────────────────── */
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.form-group { display: flex; flex-direction: column; gap: 5px; }
+.form-group.full { grid-column: 1/-1; }
+label { font-size: 12px; color: var(--c-muted); font-weight: 500; }
+select, input[type=range] {
+  background: var(--c-card);
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  color: var(--c-text);
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  width: 100%;
+  cursor: pointer;
+  transition: border-color .2s;
+}
+select:hover, select:focus {
+  border-color: var(--c-accent);
+  outline: none;
+}
+.slider-wrap { display: flex; align-items: center; gap: 8px; }
+input[type=range] {
+  padding: 0;
+  flex: 1;
+  accent-color: var(--c-accent);
+}
+.slider-val {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--c-accent);
+  min-width: 28px;
+  text-align: right;
+}
+
+/* ── 예측 버튼 ───────────────────────────────── */
+.btn-predict {
+  width: 100%;
+  padding: 12px;
+  border: none;
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, #2563eb, #3b82f6);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: opacity .2s, transform .15s;
+  margin-top: 4px;
+  box-shadow: 0 2px 12px rgba(59,130,246,.3);
+}
+.btn-predict:hover { opacity: .9; transform: translateY(-1px); }
+.btn-predict:active { transform: translateY(0); }
+.btn-predict.loading { opacity: .6; pointer-events: none; }
+.spinner { animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── 결과 카드 ───────────────────────────────── */
+.result-card {
+  background: var(--c-card);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+  padding: 16px;
+  display: none;
+}
+.result-card.visible { display: block; }
+
+.risk-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.risk-badge {
+  padding: 6px 16px;
+  border-radius: 20px;
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+}
+.risk-badge.high  { background: var(--c-high); }
+.risk-badge.mid   { background: var(--c-mid); }
+.risk-badge.low   { background: var(--c-low); }
+
+.risk-score-text { font-size: 28px; font-weight: 700; }
+.risk-label-sm { font-size: 11px; color: var(--c-muted); margin-top: 1px; }
+
+/* 스코어 바 */
+.score-bar-wrap { margin: 12px 0; }
+.score-bar-track {
+  height: 8px;
+  background: var(--c-border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.score-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width .5s ease;
+  background: linear-gradient(90deg, var(--c-low), var(--c-mid), var(--c-high));
+}
+
+/* 계수 그리드 */
+.factor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+  margin-top: 10px;
+}
+.factor-item {
+  background: rgba(255,255,255,.04);
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 11px;
+}
+.factor-name { color: var(--c-muted); }
+.factor-val  { font-weight: 700; color: var(--c-accent); margin-top: 2px; }
+
+/* 설명 목록 */
+.explanation-list { margin-top: 10px; display: flex; flex-direction: column; gap: 5px; }
+.explanation-item {
+  font-size: 12px;
+  color: var(--c-muted);
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+}
+.explanation-item::before { content: "▸"; color: var(--c-accent); flex-shrink: 0; }
+
+.inference-ms { font-size: 10px; color: var(--c-muted); text-align: right; margin-top: 6px; }
+
+/* ── 핫스팟 목록 ──────────────────────────────── */
+.hotspot-list { display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto; }
+.hotspot-item {
+  background: var(--c-card);
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  transition: border-color .2s, background .2s;
+}
+.hotspot-item:hover {
+  border-color: var(--c-accent);
+  background: rgba(59,130,246,.06);
+}
+.hotspot-rank {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--c-muted);
+  min-width: 20px;
+}
+.hotspot-info { flex: 1; min-width: 0; }
+.hotspot-name {
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hotspot-meta { font-size: 11px; color: var(--c-muted); margin-top: 2px; }
+.hotspot-score {
+  font-size: 13px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 12px;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+/* ── 오른쪽 지도 ──────────────────────────────── */
+.map-container {
+  grid-column: 2;
+  grid-row: 1 / -1;
+  position: relative;
+}
+#map { width: 100%; height: 100%; }
+
+.map-legend {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  background: rgba(15,23,42,.9);
+  border: 1px solid var(--c-border);
+  border-radius: 10px;
+  padding: 12px 16px;
+  z-index: 1000;
+  font-size: 12px;
+  min-width: 130px;
+  backdrop-filter: blur(8px);
+}
+.map-legend-title { font-weight: 700; margin-bottom: 8px; color: var(--c-text); }
+.legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; color: var(--c-muted); }
+.legend-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+
+/* ── 데이터 소스 배너 ────────────────────────── */
+.datasource-bar {
+  background: rgba(59,130,246,.06);
+  border-top: 1px solid rgba(59,130,246,.2);
+  padding: 8px 20px;
+  font-size: 11px;
+  color: var(--c-muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ── 반응형 ──────────────────────────────────── */
+@media (max-width: 900px) {
+  .main-grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 400px;
+    height: auto;
+  }
+  .map-container {
+    grid-column: 1;
+    grid-row: 2;
+    height: 400px;
+  }
+  .panel-left { max-height: 70vh; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">🚗</div>
+  <div>
+    <h1>교통사고 위험도 AI 예측</h1>
+    <div class="subtitle">도로교통공단 TAAS 공공데이터 기반 XGBoost 모델</div>
+  </div>
+  <div class="badge">TAAS 12,780건 학습</div>
+</header>
+
+<div class="main-grid">
+
+  <!-- ── 왼쪽 패널 ─────────────────────────── -->
+  <aside class="panel-left">
+
+    <!-- 입력 폼 -->
+    <div class="section">
+      <div class="section-title">🔍 위험도 조건 입력</div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>지역 (시도)</label>
+          <select id="sel-sido">
+            <option value="서울">서울특별시</option>
+            <option value="경기">경기도</option>
+            <option value="부산">부산광역시</option>
+            <option value="인천">인천광역시</option>
+            <option value="대구">대구광역시</option>
+            <option value="대전">대전광역시</option>
+            <option value="광주">광주광역시</option>
+            <option value="울산">울산광역시</option>
+            <option value="강원">강원도</option>
+            <option value="충북">충청북도</option>
+            <option value="충남">충청남도</option>
+            <option value="전북">전라북도</option>
+            <option value="전남">전라남도</option>
+            <option value="경북">경상북도</option>
+            <option value="경남">경상남도</option>
+            <option value="세종">세종특별자치시</option>
+            <option value="제주">제주특별자치도</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>날씨</label>
+          <select id="sel-weather">
+            <option value="맑음">☀️ 맑음</option>
+            <option value="흐림">☁️ 흐림</option>
+            <option value="비">🌧️ 비</option>
+            <option value="눈">❄️ 눈</option>
+            <option value="안개">🌫️ 안개</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>도로형태</label>
+          <select id="sel-road">
+            <option value="단일로">단일로</option>
+            <option value="교차로">교차로</option>
+            <option value="기타">기타</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>월</label>
+          <select id="sel-month">
+            <option value="1">1월</option><option value="2">2월</option>
+            <option value="3">3월</option><option value="4">4월</option>
+            <option value="5">5월</option><option value="6">6월</option>
+            <option value="7">7월</option><option value="8">8월</option>
+            <option value="9">9월</option><option value="10">10월</option>
+            <option value="11">11월</option><option value="12">12월</option>
+          </select>
+        </div>
+        <div class="form-group full">
+          <label>시간 <span id="hour-display" style="color:var(--c-accent);font-weight:700">12시</span></label>
+          <div class="slider-wrap">
+            <input type="range" id="slider-hour" min="0" max="23" value="12">
+          </div>
+        </div>
+      </div>
+      <button class="btn-predict" id="btn-predict" onclick="runPredict()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2V9M9 21H5a2 2 0 0 1-2-2V9m0 0h18"/></svg>
+        AI 위험도 예측
+      </button>
+    </div>
+
+    <!-- 결과 카드 -->
+    <div class="section">
+      <div class="section-title">📊 예측 결과</div>
+      <div class="result-card" id="result-card">
+        <div class="risk-header">
+          <div id="risk-badge" class="risk-badge">—</div>
+          <div>
+            <div class="risk-score-text" id="risk-score-text">—</div>
+            <div class="risk-label-sm">위험 점수 (0=안전, 1=최고위험)</div>
+          </div>
+        </div>
+        <div class="score-bar-wrap">
+          <div class="score-bar-track">
+            <div class="score-bar-fill" id="score-bar" style="width:0%"></div>
+          </div>
+        </div>
+        <div class="factor-grid" id="factor-grid"></div>
+        <div class="explanation-list" id="explanation-list"></div>
+        <div class="inference-ms" id="inference-ms"></div>
+      </div>
+      <div id="result-placeholder" style="color:var(--c-muted);font-size:13px;text-align:center;padding:20px 0">
+        조건을 입력하고 예측 버튼을 누르세요
+      </div>
+    </div>
+
+    <!-- 핫스팟 목록 -->
+    <div class="section">
+      <div class="section-title">⚠️ 전국 고위험 구간 TOP 50</div>
+      <div class="hotspot-list" id="hotspot-list">
+        <div style="color:var(--c-muted);font-size:13px;text-align:center;padding:16px">로딩 중...</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ── 지도 ──────────────────────────────── -->
+  <div class="map-container">
+    <div id="map"></div>
+    <div class="map-legend">
+      <div class="map-legend-title">위험도 등급</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--c-high)"></div> 고위험</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--c-mid)"></div> 중위험</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--c-low)"></div> 저위험</div>
+    </div>
+  </div>
+
+</div>
+
+<div class="datasource-bar">
+  🗂️ 데이터 출처: 도로교통공단 TAAS 전국교통사고다발지역표준데이터 (2012-2024, 12,780건) · 시간대별/도로형태별/월별 교통사고 통계 (taas.koroad.or.kr)
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// ── 슬라이더 ─────────────────────────────────
+const sliderHour = document.getElementById('slider-hour');
+const hourDisplay = document.getElementById('hour-display');
+sliderHour.addEventListener('input', () => {
+  hourDisplay.textContent = sliderHour.value + '시';
+});
+
+// 현재 시각 기본값
+const now = new Date();
+sliderHour.value = now.getHours();
+hourDisplay.textContent = now.getHours() + '시';
+document.getElementById('sel-month').value = now.getMonth() + 1;
+
+// ── 지도 초기화 (CDN 차단 시 graceful 처리) ──────
+let map = null;
+let markers = [];
+let predictMarker = null;
+
+try {
+  if (typeof L !== 'undefined') {
+    map = L.map('map', { zoomControl: true }).setView([36.5, 127.7], 7);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '© OpenStreetMap © CARTO',
+      subdomains: 'abcd',
+      maxZoom: 19,
+    }).addTo(map);
+  } else {
+    document.getElementById('map').innerHTML =
+      '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#64748b;font-size:14px;flex-direction:column;gap:8px">' +
+      '<div style="font-size:32px">🗺️</div>' +
+      '<div>지도 타일 로드 중... (인터넷 연결 필요)</div>' +
+      '<div style="font-size:12px">위험 예측 기능은 정상 작동합니다</div></div>';
+  }
+} catch(e) {
+  console.warn('지도 초기화 실패:', e.message);
+}
+
+function riskColor(score) {
+  if (score >= 0.65) return '#ef4444';
+  if (score >= 0.38) return '#f59e0b';
+  return '#22c55e';
+}
+
+function clearMarkers() {
+  if (!map) return;
+  markers.forEach(m => map.removeLayer(m));
+  markers = [];
+}
+
+// ── 핫스팟 로드 & 지도 마커 ───────────────────
+async function loadHotspots() {
+  try {
+    const res = await fetch('/api/hotspots');
+    const json = await res.json();
+    const data = json.data || [];
+
+    // 리스트는 지도 없이도 항상 렌더링
+    renderHotspotList(data);
+
+    // 지도 마커는 Leaflet이 로드된 경우에만
+    if (!map || typeof L === 'undefined') return;
+
+    clearMarkers();
+    data.forEach((h, i) => {
+      const color  = riskColor(h.risk_score);
+      const radius = 8 + h.risk_score * 12;
+      try {
+        const circle = L.circleMarker([h.lat, h.lng], {
+          radius, color, fillColor: color, fillOpacity: 0.7, weight: 1.5,
+        }).addTo(map);
+
+        circle.bindPopup(`
+          <b style="color:#1e293b">${h.name}</b><br>
+          <span style="font-size:12px;color:#475569">${h.region}</span><br>
+          <span style="font-size:12px">유형: ${h.accident_type}</span><br>
+          <span style="font-size:12px">사고건수: ${h.accident_count}건 / 사망: ${h.death_count}명</span><br>
+          <b style="color:${color}">위험점수: ${(h.risk_score * 100).toFixed(1)}점</b>
+        `);
+        circle.on('click', () => {
+          document.getElementById('sel-sido').value = extractSido(h.region);
+        });
+        markers.push(circle);
+      } catch(me) { /* 개별 마커 오류 무시 */ }
+    });
+  } catch (e) {
+    document.getElementById('hotspot-list').innerHTML =
+      '<div style="color:#ef4444;font-size:13px;padding:12px">핫스팟 로드 실패: ' + e.message + '</div>';
+  }
+}
+
+function extractSido(region) {
+  const SIDOS = ['서울','부산','대구','인천','광주','대전','울산','세종','경기','강원','충북','충남','전북','전남','경북','경남','제주'];
+  for (const s of SIDOS) if (region.includes(s)) return s;
+  return '서울';
+}
+
+function renderHotspotList(data) {
+  const el = document.getElementById('hotspot-list');
+  el.innerHTML = data.slice(0, 50).map((h, i) => {
+    const color = riskColor(h.risk_score);
+    const score100 = (h.risk_score * 100).toFixed(0);
+    return `
+      <div class="hotspot-item" onclick="flyToHotspot(${h.lat},${h.lng},'${h.name}')">
+        <div class="hotspot-rank">${i+1}</div>
+        <div class="hotspot-info">
+          <div class="hotspot-name">${h.name}</div>
+          <div class="hotspot-meta">${h.region.substring(0,20)} · ${h.accident_type} · ${h.accident_count}건</div>
+        </div>
+        <div class="hotspot-score" style="background:${color}">${score100}점</div>
+      </div>`;
+  }).join('');
+}
+
+function flyToHotspot(lat, lng, name) {
+  if (map) map.flyTo([lat, lng], 14, { duration: 1.2 });
+}
+
+// ── 예측 API 호출 ─────────────────────────────
+async function runPredict() {
+  const btn = document.getElementById('btn-predict');
+  btn.classList.add('loading');
+  btn.innerHTML = `<svg class="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> 예측 중...`;
+
+  const payload = {
+    sido:     document.getElementById('sel-sido').value,
+    hour:     parseInt(sliderHour.value),
+    month:    parseInt(document.getElementById('sel-month').value),
+    weather:  document.getElementById('sel-weather').value,
+    road_form: document.getElementById('sel-road').value,
+  };
+
+  try {
+    const t0 = performance.now();
+    const res = await fetch('/api/predict', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    const elapsed = performance.now() - t0;
+
+    if (data.status === 'ok') {
+      renderResult(data.result, payload, elapsed);
+    } else {
+      alert('오류: ' + (data.error || '알 수 없는 오류'));
+    }
+  } catch (e) {
+    alert('서버 연결 실패: ' + e.message);
+  } finally {
+    btn.classList.remove('loading');
+    btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2V9M9 21H5a2 2 0 0 1-2-2V9m0 0h18"/></svg> AI 위험도 예측`;
+  }
+}
+
+function renderResult(r, input, elapsedMs) {
+  document.getElementById('result-placeholder').style.display = 'none';
+  const card = document.getElementById('result-card');
+  card.classList.add('visible');
+
+  const score = r.risk_score;
+  const gradeClass = r.risk_grade === '고위험' ? 'high' : r.risk_grade === '중위험' ? 'mid' : 'low';
+
+  // 배지
+  const badge = document.getElementById('risk-badge');
+  badge.textContent = r.risk_grade;
+  badge.className = 'risk-badge ' + gradeClass;
+
+  // 점수 텍스트
+  document.getElementById('risk-score-text').textContent = (score * 100).toFixed(1) + '점';
+  document.getElementById('risk-score-text').style.color = r.risk_color;
+
+  // 스코어바
+  const bar = document.getElementById('score-bar');
+  bar.style.width = (score * 100) + '%';
+
+  // 계수 그리드
+  const af = r.adjustment_factors;
+  document.getElementById('factor-grid').innerHTML = [
+    ['시간 계수', (af.time_factor * 100).toFixed(0) + '%'],
+    ['날씨 계수', (af.weather_factor).toFixed(2) + 'x'],
+    ['월 계수', (af.month_factor * 100).toFixed(0) + '%'],
+    ['도로형태 계수', (af.road_form_factor * 100).toFixed(0) + '%'],
+  ].map(([n,v]) => `
+    <div class="factor-item">
+      <div class="factor-name">${n}</div>
+      <div class="factor-val">${v}</div>
+    </div>
+  `).join('');
+
+  // 설명
+  document.getElementById('explanation-list').innerHTML =
+    (r.explanations || []).map(e =>
+      `<div class="explanation-item">${e}</div>`
+    ).join('');
+
+  // 응답 시간
+  document.getElementById('inference-ms').textContent =
+    `모델 추론 ${r.inference_ms}ms | 총 응답 ${elapsedMs.toFixed(0)}ms`;
+
+  // 지도 마커 (Leaflet 로드된 경우에만)
+  if (map && typeof L !== 'undefined') {
+    const sido = input.sido;
+    const coord = SIDO_COORDS[sido] || [36.5, 127.5];
+    if (predictMarker) map.removeLayer(predictMarker);
+    try {
+      predictMarker = L.marker(coord, {
+        icon: L.divIcon({
+          className: '',
+          html: `<div style="background:${r.risk_color};color:#fff;font-weight:700;font-size:12px;padding:4px 8px;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.4);white-space:nowrap;border:2px solid #fff;">${sido} ${r.risk_grade}</div>`,
+          iconAnchor: [30, 12],
+        })
+      }).addTo(map);
+      map.flyTo(coord, 10, { duration: 1 });
+    } catch(me) { /* 마커 오류 무시 */ }
+  }
+}
+
+const SIDO_COORDS = {
+  '서울': [37.5665, 126.9780], '경기': [37.4138, 127.5183],
+  '부산': [35.1796, 129.0756], '인천': [37.4563, 126.7052],
+  '대구': [35.8714, 128.6014], '대전': [36.3504, 127.3845],
+  '광주': [35.1595, 126.8526], '울산': [35.5384, 129.3114],
+  '강원': [37.8228, 128.1555], '충북': [36.6357, 127.4917],
+  '충남': [36.5184, 126.8000], '전북': [35.7175, 127.1530],
+  '전남': [34.8161, 126.4630], '경북': [36.4919, 128.8889],
+  '경남': [35.2383, 128.6922], '세종': [36.4801, 127.2890],
+  '제주': [33.4996, 126.5312],
+};
+
+// 초기화
+loadHotspots();
+</script>
+</body>
+</html>
